@@ -1,13 +1,13 @@
 import { Platform } from "react-native";
 import BackgroundService from "react-native-background-actions";
 import type { Device } from "react-native-ble-plx";
-import { saveReading } from "../mileage/sync";
+import { endDrive, retryUploads, saveReading } from "../mileage/sync";
 import { setStatus } from "../status";
 import { item } from "../storage";
 import { Elm327 } from "./elm327";
 import { manager, waitForPoweredOn } from "./manager";
 
-const POLL_MS = 5 * 60_000; // while driving, so the last reading is close to the trip's end
+const POLL_MS = 5 * 60_000; // while driving, so the value kept for the upload is close to the trip's end
 const RETRY_MS = 30_000; // adapter awake but ECU silent (ignition off)
 
 export const pairedDevice = item<string>("pairedDeviceId");
@@ -51,12 +51,17 @@ async function run(deviceId: string, isActive: () => boolean) {
       if (!isActive()) break;
       setStatus({ connection: "connected" }, false);
       await elm.attach(device);
+      // A drive cut short (app stopped, phone restarted) and anything still queued go up first.
+      await endDrive().catch(() => undefined);
+      await retryUploads().catch(() => undefined);
       while (isActive() && !disconnected) {
         let delay = POLL_MS;
         try {
           await saveReading(await elm.readPid31());
         } catch {
+          // The engine stopped answering: the drive is over, even if the adapter stays powered and connected.
           delay = RETRY_MS;
+          await endDrive().catch(() => undefined);
         }
         if (isActive() && !disconnected) await sleep(delay);
       }
@@ -66,6 +71,7 @@ async function run(deviceId: string, isActive: () => boolean) {
     } finally {
       sub.remove();
       elm.detach();
+      await endDrive().catch(() => undefined);
     }
     if (isActive() && !disconnected) {
       await manager.cancelDeviceConnection(deviceId).catch(() => undefined);

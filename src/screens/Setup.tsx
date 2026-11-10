@@ -1,25 +1,33 @@
 import { useEffect, useRef, useState } from "react";
 import { ActivityIndicator, Pressable, ScrollView, Text } from "react-native";
 import type { Device } from "react-native-ble-plx";
-import { createVehicle, fetchVehicle, patchVehicle } from "../api/supabase";
+import { listVehicles } from "../api/onlycars";
 import { pairedDevice } from "../ble/autoConnect";
 import { Elm327 } from "../ble/elm327";
 import { manager, waitForPoweredOn } from "../ble/manager";
 import { requestBlePermissions } from "../ble/permissions";
-import { rememberVehicle, setBaseline } from "../mileage/sync";
+import { rememberSiteOdometer, setBaseline } from "../mileage/sync";
+import type { RemoteVehicle } from "../types";
 import { Button, Field, Note, styles, Title } from "./ui";
 
 type Step =
   | { name: "scan" }
   | { name: "reading"; device: Device }
-  | { name: "baseline"; device: Device; pid31: number };
+  | { name: "car"; device: Device; pid31: number }
+  | { name: "baseline"; device: Device; pid31: number; car: RemoteVehicle };
 
-/** One-time pairing: pick the adapter, read PID 31, enter the dashboard km. */
+const carTitle = (c: RemoteVehicle) => c.nickname;
+const carDetails = (c: RemoteVehicle) =>
+  [[c.make, c.model, c.year].filter(Boolean).join(" "), c.plate, `${Math.round(c.currentOdometerKm).toLocaleString()} km`]
+    .filter(Boolean)
+    .join(" · ");
+
+/** One-time pairing: pick the adapter, read PID 31, pick the car in OnlyCars, confirm the dashboard km. */
 export default function Setup({ onDone }: { onDone: () => void }) {
   const [step, setStep] = useState<Step>({ name: "scan" });
   const [devices, setDevices] = useState<Device[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [name, setName] = useState("Honda Accord 2009");
+  const [cars, setCars] = useState<RemoteVehicle[] | null>(null);
   const [odometer, setOdometer] = useState("");
   const [saving, setSaving] = useState(false);
   const connected = useRef<string | null>(null);
@@ -66,7 +74,8 @@ export default function Setup({ onDone }: { onDone: () => void }) {
       await elm.attach(live);
       const pid31 = await elm.readPid31();
       elm.detach();
-      setStep({ name: "baseline", device, pid31 });
+      setStep({ name: "car", device, pid31 });
+      void loadCars();
     } catch (e) {
       await manager.cancelDeviceConnection(device.id).catch(() => undefined);
       connected.current = null;
@@ -78,24 +87,24 @@ export default function Setup({ onDone }: { onDone: () => void }) {
     }
   }
 
-  async function save(device: Device, pid31: number) {
+  async function loadCars() {
+    setError(null);
+    setCars(null);
+    try {
+      setCars(await listVehicles());
+    } catch (e) {
+      setCars([]);
+      setError(`Could not load your cars from OnlyCars (${e instanceof Error ? e.message : String(e)}).`);
+    }
+  }
+
+  async function save(device: Device, pid31: number, car: RemoteVehicle) {
     setSaving(true);
     setError(null);
     try {
-      const km = Number(odometer);
-      const existing = await fetchVehicle();
-      if (existing) {
-        await patchVehicle(existing.id, { name, adapter_device_id: device.id });
-        await setBaseline({ ...existing, name, adapter_device_id: device.id }, km, pid31);
-      } else {
-        const created = await createVehicle({
-          name,
-          adapter_device_id: device.id,
-          baseline_odometer_km: km,
-          baseline_pid31_km: pid31,
-        });
-        await rememberVehicle(created);
-      }
+      // The baseline stays on this phone; OnlyCars only ever receives the calculated odometer.
+      await setBaseline({ id: car.id, name: carTitle(car) }, Number(odometer), pid31);
+      await rememberSiteOdometer(car.currentOdometerKm);
       await manager.cancelDeviceConnection(device.id).catch(() => undefined);
       connected.current = null;
       await pairedDevice.set(device.id);
@@ -107,15 +116,14 @@ export default function Setup({ onDone }: { onDone: () => void }) {
   }
 
   if (step.name === "baseline") {
-    const valid = /^\d{1,7}$/.test(odometer) && name.trim().length > 0;
+    const valid = /^\d{1,7}$/.test(odometer);
     return (
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
         <Title>Enter the baseline</Title>
         <Note>
-          The adapter reports {step.pid31.toLocaleString()} km since codes were cleared. Type the
-          odometer exactly as the dashboard shows it right now.
+          {carTitle(step.car)}: OnlyCars has {Math.round(step.car.currentOdometerKm).toLocaleString()} km. Check
+          the dashboard and correct the number so it matches exactly what the car shows right now.
         </Note>
-        <Field placeholder="Car name" value={name} onChangeText={setName} />
         <Field
           placeholder="Dashboard odometer (km)"
           keyboardType="number-pad"
@@ -123,7 +131,33 @@ export default function Setup({ onDone }: { onDone: () => void }) {
           onChangeText={setOdometer}
         />
         {error && <Note error>{error}</Note>}
-        <Button title="Save" disabled={!valid || saving} onPress={() => save(step.device, step.pid31)} />
+        <Button title="Save" disabled={!valid || saving} onPress={() => save(step.device, step.pid31, step.car)} />
+      </ScrollView>
+    );
+  }
+
+  if (step.name === "car") {
+    return (
+      <ScrollView contentContainerStyle={styles.content}>
+        <Title>Which car is this?</Title>
+        <Note>Pick the car in OnlyCars that the adapter is plugged into.</Note>
+        {error && <Note error>{error}</Note>}
+        {cars === null && <ActivityIndicator />}
+        {cars?.length === 0 && !error && <Note>No cars yet. Add the car in OnlyCars first, then reload.</Note>}
+        {cars?.map((c) => (
+          <Pressable
+            key={c.id}
+            style={styles.row}
+            onPress={() => {
+              setOdometer(String(Math.round(c.currentOdometerKm)));
+              setStep({ name: "baseline", device: step.device, pid31: step.pid31, car: c });
+            }}
+          >
+            <Text style={styles.rowTitle}>{carTitle(c)}</Text>
+            <Note>{carDetails(c)}</Note>
+          </Pressable>
+        ))}
+        {cars !== null && <Button quiet title="Reload" onPress={() => void loadCars()} />}
       </ScrollView>
     );
   }

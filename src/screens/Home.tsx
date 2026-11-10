@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Linking, Platform, ScrollView, Text, View } from "react-native";
-import { supabase } from "../api/supabase";
+import { setToken } from "../api/onlycars";
 import { pairedDevice, readNow, stopAutoConnect } from "../ble/autoConnect";
 import { forgetLocalData, localVehicle, retryUploads, setBaseline } from "../mileage/sync";
 import { useStatus } from "../status";
@@ -42,7 +42,7 @@ export default function Home({ onUnpaired }: { onUnpaired: () => void }) {
     await stopAutoConnect();
     await pairedDevice.clear();
     await forgetLocalData();
-    await supabase.auth.signOut();
+    await setToken(null);
   }
 
   const rebaselineForm = (
@@ -77,10 +77,19 @@ export default function Home({ onUnpaired }: { onUnpaired: () => void }) {
       {status.needsRebaseline && (
         <View style={styles.banner}>
           <Note>
-            The car's counter was reset (codes cleared or battery disconnected). Enter the current
-            dashboard km to resume syncing.
+            The mileage can't be calculated: the car's counter was reset (codes cleared or battery
+            disconnected), or OnlyCars has a higher reading. Enter the current dashboard km to resume syncing.
           </Note>
           {rebaselineForm}
+        </View>
+      )}
+      {status.tokenRejected && (
+        <View style={styles.banner}>
+          <Note>
+            OnlyCars no longer accepts this phone's token. Create a new one in OnlyCars (Settings, Connected
+            devices). Readings taken meanwhile are kept and uploaded afterwards.
+          </Note>
+          <Button title="Enter a new token" onPress={() => void setToken(null)} />
         </View>
       )}
       {status.nearLimit && !status.needsRebaseline && (
@@ -104,7 +113,7 @@ export default function Home({ onUnpaired }: { onUnpaired: () => void }) {
         />
       )}
       <Button quiet title="Pair a different adapter" onPress={unpair} />
-      <Button quiet title="Sign out" onPress={signOut} />
+      <Button quiet title="Disconnect from OnlyCars" onPress={signOut} />
     </ScrollView>
   );
 }
