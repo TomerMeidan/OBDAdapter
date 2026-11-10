@@ -5,6 +5,10 @@ adapter and syncs it to Supabase for the car maintenance website. The car doesn'
 odometer over OBD, so the app reads PID `0x31` (km since codes cleared) and adds the difference
 to a baseline you enter once. The original plan is in [docs/BUILD_GUIDE.md](docs/BUILD_GUIDE.md).
 
+> **Not yet compatible with OnlyCars.** The app currently writes to its own Supabase tables,
+> which the OnlyCars website does not read. The required changes are described in
+> [docs/ONLYCARS_INTEGRATION.md](docs/ONLYCARS_INTEGRATION.md).
+
 ## Setup
 
 1. **Hardware check first** – with Car Scanner, confirm the car answers PID `0131`
