@@ -8,7 +8,18 @@ import { retryUploads } from "./src/mileage/sync";
 import Home from "./src/screens/Home";
 import Setup from "./src/screens/Setup";
 import SignIn from "./src/screens/SignIn";
+import { setStatus } from "./src/status";
 import { styles } from "./src/screens/ui";
+
+/**
+ * Starts background sync and shows why on the home screen if Android refuses it.
+ * Android only allows starting the foreground service while the app is visible.
+ */
+function startSync() {
+  startAutoConnect().catch((e) =>
+    setStatus({ message: `Background sync could not start: ${e instanceof Error ? e.message : String(e)}` }),
+  );
+}
 
 export default function App() {
   const [token, setToken] = useState<string | null | undefined>(undefined);
@@ -17,11 +28,14 @@ export default function App() {
   useEffect(() => {
     void getToken().then(setToken);
     const unsubscribe = onTokenChange(setToken);
-    void pairedDevice.get().then((id) => setPaired(Boolean(id)));
+    // Opening the app (also after a reboot or an update) starts sync; "change" only fires when it comes back to the front.
+    void pairedDevice.get().then((id) => {
+      setPaired(Boolean(id));
+      if (id) startSync();
+    });
     const appState = AppState.addEventListener("change", (state) => {
       if (state !== "active") return;
-      // Android only allows starting the foreground service while the app is visible.
-      void startAutoConnect().catch(() => undefined);
+      startSync();
       void retryUploads().catch(() => undefined);
     });
     return () => {
@@ -46,7 +60,7 @@ export default function App() {
       <Setup
         onDone={() => {
           setPaired(true);
-          void startAutoConnect().catch(() => undefined);
+          startSync();
         }}
       />
     );
