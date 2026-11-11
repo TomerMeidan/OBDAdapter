@@ -39,6 +39,33 @@ On Android, exclude the app from battery optimisation (button on the home screen
 "Mileage sync active" notification. After a phone reboot, open the app once to restart syncing.
 On iOS, don't swipe the app away: iOS won't wake a force-quit app.
 
+## Signing key
+
+Release builds are signed with your own key (`plugins/withReleaseSigning.js`), not the React Native
+template's shared debug key, whose password is public. Create the key once and keep it out of the
+repository:
+
+1. Create the key (pick a strong password and keep it, and a copy of the file, somewhere safe):
+
+   ```bash
+   "%JAVA_HOME%\bin\keytool" -genkeypair -v -storetype PKCS12 -keystore %USERPROFILE%\keys\obd-mileage.p12 -alias obd-mileage -keyalg RSA -keysize 2048 -validity 10000
+   ```
+
+2. Add four lines to `%USERPROFILE%\.gradle\gradle.properties` (forward slashes in the path):
+
+   ```
+   OBD_UPLOAD_STORE_FILE=C:/Users/<you>/keys/obd-mileage.p12
+   OBD_UPLOAD_STORE_PASSWORD=<password>
+   OBD_UPLOAD_KEY_ALIAS=obd-mileage
+   OBD_UPLOAD_KEY_PASSWORD=<password>
+   ```
+
+3. Run `npx expo prebuild --platform android`, then `npx expo run:android --variant release`.
+
+Without these properties the release build uses the debug key and prints a line saying so. Changing
+the key means uninstalling the app first (Android refuses an update signed with another key), which
+clears its token and baseline. Losing the key has the same cost, so keep the copy.
+
 ## How it behaves
 
 - Reads PID 31 when the adapter connects, then every 5 minutes while connected.
