@@ -23,8 +23,9 @@ A device token (`ocd_…`) never expires and can do two things only: list the ac
 add an odometer reading. Removing it in OnlyCars Settings ends it; the app then keeps its queued
 readings and asks for a new token.
 
-The token is kept in the app's private storage (AsyncStorage), not the hardware keystore.
-Moving it to `expo-secure-store` is a possible hardening step.
+The token is kept in `expo-secure-store` (the Android Keystore, or the iOS Keychain after first
+unlock, this device only), and Android backup is off for the app, so it never leaves the phone.
+A token saved by an earlier version in AsyncStorage is moved there on first start.
 
 ## API
 

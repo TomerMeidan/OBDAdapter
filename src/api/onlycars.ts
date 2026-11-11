@@ -1,3 +1,4 @@
+import * as SecureStore from "expo-secure-store";
 import { localDate } from "../mileage/outcome";
 import { item } from "../storage";
 import type { Reading, RemoteVehicle } from "../types";
@@ -7,15 +8,35 @@ const BASE = (process.env.EXPO_PUBLIC_ONLYCARS_URL || "https://onlycars-ev28.onr
 /**
  * The device token made in OnlyCars (Settings, Connected devices). It can only list cars and add odometer
  * readings, never expires, and is revoked from the same Settings page.
+ *
+ * Kept in SecureStore (Android Keystore / iOS Keychain), not AsyncStorage. After first unlock, because the background
+ * loop uploads while the phone is locked; this device only, so a backup never carries it to another phone.
  */
-const tokenStore = item<string>("deviceToken");
+const TOKEN_KEY = "deviceToken";
+const SECURE = { keychainAccessible: SecureStore.AFTER_FIRST_UNLOCK_THIS_DEVICE_ONLY };
+/** Where versions before secure storage kept the token. Moved on first read, then cleared. */
+const legacyTokenStore = item<string>(TOKEN_KEY);
 const listeners = new Set<(token: string | null) => void>();
 
-export const getToken = () => tokenStore.get();
+/** The saved token, or null. Never rejects: an unreadable store reads as "no token", so the app asks for one again. */
+export async function getToken(): Promise<string | null> {
+  try {
+    const token = await SecureStore.getItemAsync(TOKEN_KEY, SECURE);
+    if (token) return token;
+    const legacy = await legacyTokenStore.get();
+    if (!legacy) return null;
+    await SecureStore.setItemAsync(TOKEN_KEY, legacy, SECURE);
+    await legacyTokenStore.clear();
+    return legacy;
+  } catch {
+    return null;
+  }
+}
 
 export async function setToken(token: string | null) {
-  if (token) await tokenStore.set(token);
-  else await tokenStore.clear();
+  if (token) await SecureStore.setItemAsync(TOKEN_KEY, token, SECURE);
+  else await SecureStore.deleteItemAsync(TOKEN_KEY, SECURE);
+  await legacyTokenStore.clear();
   listeners.forEach((l) => l(token));
 }
 
