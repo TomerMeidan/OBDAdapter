@@ -9,6 +9,8 @@ export interface Status {
   pendingUploads: number;
   needsRebaseline: boolean;
   nearLimit: boolean;
+  /** OnlyCars answered 401: the token was revoked or is wrong. */
+  tokenRejected: boolean;
   message: string | null;
 }
 
@@ -21,6 +23,7 @@ let status: Status = {
   pendingUploads: 0,
   needsRebaseline: false,
   nearLimit: false,
+  tokenRejected: false,
   message: null,
 };
 const listeners = new Set<() => void>();

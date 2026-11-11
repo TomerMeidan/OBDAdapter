@@ -1,16 +1,21 @@
-import { fetchVehicle, insertReading, patchVehicle } from "../api/supabase";
+import { ApiError, postReading } from "../api/onlycars";
 import { setStatus } from "../status";
 import { item } from "../storage";
 import type { Reading, Vehicle } from "../types";
 import { decide } from "./calc";
+import { classify, dropMessage, uuid } from "./outcome";
 
 // Uploads wait here while the phone is offline (e.g. underground parking).
-type Op =
-  | { type: "reading"; reading: Reading }
-  | { type: "vehicle"; id: string; patch: Partial<Vehicle> };
-
-const queueStore = item<Op[]>("uploadQueue");
+const queueStore = item<Reading[]>("uploadQueue");
 const vehicleStore = item<Vehicle>("vehicle");
+const lastPid31Store = item<number>("lastPid31");
+/**
+ * The newest value of the drive in progress. Only the last one is uploaded, when the drive ends: OnlyCars keeps
+ * every reading as a point in the car's history and caps a car at 5,000.
+ */
+const driveStore = item<{ odometer_km: number; read_at: string }>("currentDrive");
+/** The last odometer value queued for upload (or the site's own value at setup), to skip unchanged ones. */
+const lastQueuedStore = item<number>("lastQueuedOdometer");
 
 let chain: Promise<unknown> = Promise.resolve();
 function exclusive<T>(fn: () => Promise<T>): Promise<T> {
@@ -19,102 +24,93 @@ function exclusive<T>(fn: () => Promise<T>): Promise<T> {
   return result;
 }
 
-async function flush(): Promise<boolean> {
+async function flush(): Promise<void> {
   const queue = (await queueStore.get()) ?? [];
-  let failure: string | null = null;
+  let message: string | null = null;
+  let tokenRejected = false;
   while (queue.length) {
-    const op = queue[0];
     try {
-      if (op.type === "reading") await insertReading(op.reading);
-      else await patchVehicle(op.id, op.patch);
+      await postReading(queue[0]);
     } catch (e) {
-      failure = `Upload waiting: ${e instanceof Error ? e.message : String(e)}`;
-      break;
+      const error = e instanceof ApiError ? e : new ApiError(null, null, String(e));
+      const outcome = classify(error.status, error.code);
+      if (outcome === "retry") {
+        message = `Upload waiting: ${error.message}`;
+        break;
+      }
+      if (outcome === "auth") {
+        tokenRejected = true;
+        message = "OnlyCars refused the device token. Enter a new one.";
+        break;
+      }
+      if (outcome === "rebaseline") {
+        const vehicle = await vehicleStore.get();
+        if (vehicle) await vehicleStore.set({ ...vehicle, needs_rebaseline: true });
+        setStatus({ needsRebaseline: true });
+        message = "OnlyCars already has a higher reading for this car. Enter the dashboard km again.";
+      } else {
+        message = dropMessage(error.code);
+      }
+      // Anything below is a reading the server will never take: drop it so it can't block the rest.
     }
     queue.shift();
     await queueStore.set(queue);
   }
-  setStatus({ pendingUploads: queue.length, message: failure });
-  return queue.length === 0;
+  setStatus({ pendingUploads: queue.length, message, tokenRejected });
 }
 
-/** Server copy when everything is uploaded, otherwise the local copy (which is newer). */
-async function currentVehicle(synced: boolean): Promise<Vehicle | null> {
-  if (synced) {
-    try {
-      const remote = await fetchVehicle();
-      if (remote) {
-        await vehicleStore.set(remote);
-        return remote;
-      }
-    } catch {
-      // offline: fall through to the local copy
-    }
-  }
-  return vehicleStore.get();
-}
-
-async function patchLocalAndQueue(vehicle: Vehicle, patch: Partial<Vehicle>, ops: Op[]) {
-  await vehicleStore.set({ ...vehicle, ...patch });
-  const queue = (await queueStore.get()) ?? [];
-  queue.push({ type: "vehicle", id: vehicle.id, patch }, ...ops);
-  await queueStore.set(queue);
-}
-
-/** Turns a PID 31 value into a reading (or a re-baseline request) and uploads it. */
+/** Turns a PID 31 value into the drive's current odometer value (or a re-baseline request). Nothing is uploaded yet. */
 export function saveReading(pid31: number, readAt = new Date()): Promise<void> {
   return exclusive(async () => {
-    const vehicle = await currentVehicle(await flush());
+    const vehicle = await vehicleStore.get();
     if (!vehicle) return;
 
     const at = readAt.toISOString();
-    const lastPid31 = await item<number>("lastPid31").get();
-    const unchanged = pid31 === lastPid31;
-    const decision = decide(vehicle, pid31, lastPid31);
-    const reading = (odometer: number): Op => ({
-      type: "reading",
-      reading: { vehicle_id: vehicle.id, read_at: at, pid31_km: pid31, odometer_km: odometer },
-    });
+    const decision = decide(vehicle, pid31, await lastPid31Store.get());
 
     switch (decision.kind) {
       case "capture_baseline":
-        await patchLocalAndQueue(
-          vehicle,
-          { baseline_pid31_km: pid31, baseline_at: at, needs_rebaseline: false },
-          [reading(decision.odometer)],
-        );
-        await item<number>("lastPid31").set(pid31);
-        setStatus({
-          lastPid31: pid31,
-          lastOdometer: decision.odometer,
-          lastReadAt: at,
-          needsRebaseline: false,
-          nearLimit: false,
-        });
+        await vehicleStore.set({ ...vehicle, baseline_pid31_km: pid31, baseline_at: at, needs_rebaseline: false });
         break;
       case "paused":
         setStatus({ lastPid31: pid31, needsRebaseline: true });
-        break;
+        return;
       case "rebaseline":
-        await patchLocalAndQueue(vehicle, { needs_rebaseline: true }, []);
+        await vehicleStore.set({ ...vehicle, needs_rebaseline: true });
         setStatus({ lastPid31: pid31, needsRebaseline: true });
-        break;
+        return;
       case "reading":
-        if (!unchanged) {
-          const queue = (await queueStore.get()) ?? [];
-          queue.push(reading(decision.odometer));
-          await queueStore.set(queue);
-          await item<number>("lastPid31").set(pid31);
-        }
-        setStatus({
-          lastPid31: pid31,
-          lastOdometer: decision.odometer,
-          lastReadAt: at,
-          needsRebaseline: false,
-          nearLimit: decision.nearLimit,
-        });
         break;
     }
+    await lastPid31Store.set(pid31);
+    await driveStore.set({ odometer_km: decision.odometer, read_at: at });
+    setStatus({
+      lastPid31: pid31,
+      lastOdometer: decision.odometer,
+      lastReadAt: at,
+      needsRebaseline: false,
+      nearLimit: decision.kind === "reading" && decision.nearLimit,
+    });
+  });
+}
+
+/**
+ * Ends the drive in progress: queues its last value (unless the odometer hasn't moved) and uploads.
+ * Called when the adapter disconnects or the engine stops answering, and on the next connect in case the app was
+ * stopped mid-drive. Does nothing when no drive is open.
+ */
+export function endDrive(): Promise<void> {
+  return exclusive(async () => {
+    const drive = await driveStore.get();
+    if (!drive) return;
+    const vehicle = await vehicleStore.get();
+    if (vehicle && !vehicle.needs_rebaseline && drive.odometer_km !== (await lastQueuedStore.get())) {
+      const queue = (await queueStore.get()) ?? [];
+      queue.push({ id: uuid(), vehicle_id: vehicle.id, read_at: drive.read_at, odometer_km: drive.odometer_km });
+      await queueStore.set(queue);
+      await lastQueuedStore.set(drive.odometer_km);
+    }
+    await driveStore.clear();
     await flush();
   });
 }
@@ -123,27 +119,24 @@ export function saveReading(pid31: number, readAt = new Date()): Promise<void> {
  * Stores a new baseline. With `pid31 === null` the next PID 31 read becomes
  * the baseline, so the dashboard km should be entered before driving on.
  */
-export function setBaseline(vehicle: Vehicle, odometerKm: number, pid31: number | null) {
+export function setBaseline(vehicle: Pick<Vehicle, "id" | "name">, odometerKm: number, pid31: number | null) {
   return exclusive(async () => {
-    await flush();
-    await item<number>("lastPid31").clear();
-    await patchLocalAndQueue(
-      vehicle,
-      {
-        baseline_odometer_km: odometerKm,
-        baseline_pid31_km: pid31,
-        baseline_at: new Date().toISOString(),
-        needs_rebaseline: false,
-      },
-      [],
-    );
-    setStatus({ needsRebaseline: false, nearLimit: false, lastOdometer: odometerKm });
-    await flush();
+    await Promise.all([lastPid31Store.clear(), driveStore.clear()]);
+    await vehicleStore.set({
+      id: vehicle.id,
+      name: vehicle.name,
+      baseline_odometer_km: odometerKm,
+      baseline_pid31_km: pid31,
+      baseline_at: new Date().toISOString(),
+      needs_rebaseline: false,
+    });
+    setStatus({ needsRebaseline: false, nearLimit: false, lastOdometer: odometerKm, message: null });
   });
 }
 
-export function rememberVehicle(vehicle: Vehicle) {
-  return vehicleStore.set(vehicle);
+/** At setup: what OnlyCars already shows for the car, so the same value isn't uploaded again. */
+export function rememberSiteOdometer(km: number) {
+  return lastQueuedStore.set(km);
 }
 
 export function localVehicle() {
@@ -155,5 +148,12 @@ export function retryUploads() {
 }
 
 export async function forgetLocalData() {
-  await Promise.all([queueStore.clear(), vehicleStore.clear(), item("lastPid31").clear()]);
+  await Promise.all([
+    queueStore.clear(),
+    vehicleStore.clear(),
+    lastPid31Store.clear(),
+    driveStore.clear(),
+    lastQueuedStore.clear(),
+  ]);
+  setStatus({ pendingUploads: 0, lastOdometer: null, lastReadAt: null, lastPid31: null, needsRebaseline: false, nearLimit: false, message: null, tokenRejected: false });
 }
