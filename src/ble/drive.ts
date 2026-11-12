@@ -13,10 +13,12 @@ export const RUNNING_VOLTS = 13.2;
 export const DRIVE_POLL_MS = 5 * 60_000;
 export const PARKED_POLL_MS = 60_000;
 export const PARKED_PID_EVERY_MS = 10 * 60_000;
+/** After PID 31 failed, how long a high voltage alone can't start another try. */
+export const VOLTAGE_RETRY_AFTER_FAIL_MS = 5 * 60_000;
 
 export interface DriveState {
   mode: Mode;
-  /** When PID 31 was last tried while parked (ms since epoch). */
+  /** When PID 31 last failed or was last tried while parked (ms since epoch). */
   lastParkedPidAt: number;
 }
 
@@ -30,18 +32,31 @@ export interface DriveIo {
   onVoltage(volts: number | null): void;
 }
 
-/** The state after a fresh connection: parked until the voltage or PID 31 shows the engine running. */
-export const initialState = (): DriveState => ({ mode: "parked", lastParkedPidAt: 0 });
+/**
+ * When PID 31 last failed, kept across reconnects: a link that keeps dropping at the edge of Bluetooth range must
+ * not send an OBD request on every reconnect.
+ */
+let lastPidFailureAt = 0;
+
+/** The state after a connection: parked until the voltage or PID 31 shows the engine running. */
+export const initialState = (): DriveState => ({ mode: "parked", lastParkedPidAt: lastPidFailureAt });
+
+/** For tests: forget the last PID 31 failure. */
+export function resetPidFailures() {
+  lastPidFailureAt = 0;
+}
 
 /** Runs one step and says how long to wait before the next one. */
 export async function step(state: DriveState, io: DriveIo, now: number): Promise<{ state: DriveState; delay: number }> {
   if (state.mode === "driving") {
+    // Shown on the home screen, so the running voltage can be compared with RUNNING_VOLTS.
+    io.onVoltage(await io.readVoltage().catch(() => null));
     try {
       await io.onReading(await io.readPid31());
       return { state, delay: DRIVE_POLL_MS };
     } catch {
       await io.onDriveEnd().catch(() => undefined);
-      // Don't try PID 31 again right away: the next parked steps use the voltage.
+      lastPidFailureAt = now;
       return { state: { mode: "parked", lastParkedPidAt: now }, delay: PARKED_POLL_MS };
     }
   }
@@ -53,7 +68,9 @@ export async function step(state: DriveState, io: DriveIo, now: number): Promise
     // Unreadable: fall back to the occasional PID 31 try below.
   }
   io.onVoltage(volts);
-  if (volts !== null && volts >= RUNNING_VOLTS) {
+  // A high voltage with the engine off (a battery charger, a jump pack) would otherwise send PID 31 every minute:
+  // after a failed try, the voltage starts a drive only once the occasional check is due anyway.
+  if (volts !== null && volts >= RUNNING_VOLTS && now - state.lastParkedPidAt >= VOLTAGE_RETRY_AFTER_FAIL_MS) {
     return { state: { ...state, mode: "driving" }, delay: 0 };
   }
 
@@ -62,6 +79,7 @@ export async function step(state: DriveState, io: DriveIo, now: number): Promise
       await io.onReading(await io.readPid31());
       return { state: { mode: "driving", lastParkedPidAt: now }, delay: DRIVE_POLL_MS };
     } catch {
+      lastPidFailureAt = now;
       return { state: { ...state, lastParkedPidAt: now }, delay: PARKED_POLL_MS };
     }
   }
