@@ -9,8 +9,6 @@ export interface Status {
   pendingUploads: number;
   needsRebaseline: boolean;
   nearLimit: boolean;
-  /** The car battery's voltage, as the adapter last measured it. */
-  voltage: number | null;
   /** OnlyCars answered 401: the token was revoked or is wrong. */
   tokenRejected: boolean;
   message: string | null;
@@ -26,7 +24,6 @@ let status: Status = {
   needsRebaseline: false,
   nearLimit: false,
   tokenRejected: false,
-  voltage: null,
   message: null,
 };
 const listeners = new Set<() => void>();

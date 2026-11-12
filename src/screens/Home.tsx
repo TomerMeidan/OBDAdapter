@@ -70,9 +70,6 @@ export default function Home({ onUnpaired }: { onUnpaired: () => void }) {
             : "No reading yet. Start the car to take the first one."}
         </Note>
         <Note>{CONNECTION[status.connection]}</Note>
-        {status.connection === "connected" && status.voltage != null && (
-          <Note>Car battery {status.voltage.toFixed(1)} V</Note>
-        )}
         {status.pendingUploads > 0 && <Note>{status.pendingUploads} upload(s) waiting</Note>}
         {status.message && <Note error>{status.message}</Note>}
       </View>

@@ -68,12 +68,7 @@ clears its token and baseline. Losing the key has the same cost, so keep the cop
 
 ## How it behaves
 
-- Reads PID 31 every 5 minutes while the engine runs. Once it stops answering, the drive is over
-  and the app stops sending OBD requests, so the car's computers and the adapter can go to sleep.
-  While parked it only asks the adapter for the battery voltage once a minute (`ATRV`, answered by
-  the adapter without contacting the car); 13.2 V or more means the engine is running again. A
-  PID 31 try every 10 minutes covers a car whose voltage doesn't show it. The home screen shows
-  the last voltage, so the threshold can be checked on the real car.
+- Reads PID 31 when the adapter connects, then every 5 minutes while connected.
 - Uploads **one reading per drive**: the last value, when the adapter disconnects or the engine
   stops answering (or at the next connect, if the app was stopped mid-drive). A drive that didn't
   move the odometer uploads nothing.

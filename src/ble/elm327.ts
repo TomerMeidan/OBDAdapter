@@ -68,13 +68,6 @@ export function parsePid31(raw: string): number {
   throw new ElmError("UNEXPECTED", `Unexpected response: ${raw}`);
 }
 
-/** Parses the answer to `ATRV` (the adapter's own reading of the car battery, e.g. "12.6V") into volts. */
-export function parseVoltage(raw: string): number {
-  const m = raw.replace(/\s/g, "").match(/^(\d{1,2}(?:\.\d{1,2})?)V$/i);
-  if (!m) throw new ElmError("UNEXPECTED", `Unexpected voltage: ${raw}`);
-  return parseFloat(m[1]);
-}
-
 export class Elm327 {
   private write?: ElmCharacteristic;
   private subscription?: { remove(): void };
@@ -139,14 +132,6 @@ export class Elm327 {
       raw = await this.send("0131", 12000);
     }
     return parsePid31(raw);
-  }
-
-  /**
-   * The car battery's voltage as the adapter measures it on the OBD port. Answered by the adapter alone: unlike an
-   * OBD request, it sends nothing to the car's computers, so it doesn't keep them awake.
-   */
-  async readVoltage(): Promise<number> {
-    return parseVoltage(await this.send("ATRV", 3000));
   }
 
   private exchange(cmd: string, timeoutMs: number): Promise<string> {
