@@ -4,11 +4,10 @@ import type { Device } from "react-native-ble-plx";
 import { endDrive, retryUploads, saveReading } from "../mileage/sync";
 import { setStatus } from "../status";
 import { item } from "../storage";
+import { initialState, step } from "./drive";
 import { Elm327 } from "./elm327";
 import { manager, waitForPoweredOn } from "./manager";
 
-const POLL_MS = 5 * 60_000; // while driving, so the value kept for the upload is close to the trip's end
-const RETRY_MS = 30_000; // adapter awake but ECU silent (ignition off)
 
 export const pairedDevice = item<string>("pairedDeviceId");
 
@@ -35,7 +34,7 @@ async function connect(deviceId: string): Promise<Device> {
   return manager.connectToDevice(deviceId, { autoConnect: true });
 }
 
-/** Waits for the car, reads PID 31 while it's connected, repeats until stopped. */
+/** Waits for the car, reads PID 31 while the engine runs (see drive.ts), repeats until stopped. */
 async function run(deviceId: string, isActive: () => boolean) {
   while (isActive()) {
     let disconnected = false;
@@ -54,16 +53,18 @@ async function run(deviceId: string, isActive: () => boolean) {
       // A drive cut short (app stopped, phone restarted) and anything still queued go up first.
       await endDrive().catch(() => undefined);
       await retryUploads().catch(() => undefined);
+      let state = initialState();
+      const io = {
+        readPid31: () => elm.readPid31(),
+        readVoltage: () => elm.readVoltage(),
+        onReading: (pid31: number) => saveReading(pid31),
+        onDriveEnd: () => endDrive(),
+        onVoltage: (volts: number | null) => setStatus({ voltage: volts }, false),
+      };
       while (isActive() && !disconnected) {
-        let delay = POLL_MS;
-        try {
-          await saveReading(await elm.readPid31());
-        } catch {
-          // The engine stopped answering: the drive is over, even if the adapter stays powered and connected.
-          delay = RETRY_MS;
-          await endDrive().catch(() => undefined);
-        }
-        if (isActive() && !disconnected) await sleep(delay);
+        const next = await step(state, io, Date.now());
+        state = next.state;
+        if (isActive() && !disconnected && next.delay > 0) await sleep(next.delay);
       }
     } catch {
       // Bluetooth toggled, connect cancelled, adapter unplugged mid-setup…

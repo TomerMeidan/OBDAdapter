@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { Elm327, ElmError, parsePid31 } from "../src/ble/elm327.ts";
+import { Elm327, ElmError, parsePid31, parseVoltage } from "../src/ble/elm327.ts";
 
 const b64 = (s: string) => Buffer.from(s, "latin1").toString("base64");
 
@@ -97,4 +97,21 @@ test("parsePid31 handles real-world response shapes", () => {
   assert.equal(code("UNABLE TO CONNECT"), "UNABLE_TO_CONNECT");
   assert.equal(code("CAN ERROR"), "BUS_ERROR");
   assert.equal(code("7F 01 12"), "UNEXPECTED");
+});
+
+test("reads the battery voltage with ATRV", async () => {
+  const { device, sent } = fakeAdapter({ ...init, ATRV: "12.6V\r\r>" });
+  const elm = new Elm327();
+  await elm.attach(device as never);
+  assert.equal(await elm.readVoltage(), 12.6);
+  assert.equal(sent.at(-1), "ATRV");
+});
+
+test("parseVoltage handles adapter answer shapes and refuses anything else", () => {
+  assert.equal(parseVoltage("14.1V"), 14.1);
+  assert.equal(parseVoltage("12.62 V"), 12.62);
+  assert.equal(parseVoltage("9v"), 9);
+  for (const bad of ["?", "NO DATA", "OK", ""]) {
+    assert.throws(() => parseVoltage(bad), (e: unknown) => (e as ElmError).code === "UNEXPECTED");
+  }
 });
