@@ -46,3 +46,18 @@ test("running it twice changes nothing more", () => {
 test("a template it doesn't recognise stops prebuild instead of leaving the debug key", () => {
   assert.throws(() => applyReleaseSigning("android { }"), /expected signing blocks/);
 });
+
+test("an android folder made by the first version (silent debug-key fallback) is upgraded", () => {
+  // What 493ef7a wrote for the release build type.
+  const old = applyReleaseSigning(template).replace(
+    "signingConfig(findProperty('OBD_UPLOAD_STORE_FILE') ? signingConfigs.release : signingConfigs.debug)",
+    `signingConfig(findProperty('OBD_UPLOAD_STORE_FILE') ? signingConfigs.release : {
+                println("OBD Mileage: OBD_UPLOAD_STORE_FILE is not set, so this release build uses the shared debug key.")
+                signingConfigs.debug
+            }())`,
+  ).replace(/\n\n\/\/ OBD Mileage: a release build must[\s\S]*$/, "");
+  assert.ok(!old.includes("OBD_ALLOW_DEBUG_SIGNING") && old.includes("println"), "the fixture is the old output");
+
+  const upgraded: string = applyReleaseSigning(old);
+  assert.equal(upgraded, applyReleaseSigning(template));
+});

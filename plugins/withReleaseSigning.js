@@ -30,9 +30,15 @@ gradle.taskGraph.whenReady { graph ->
 }
 `;
 
-/** Rewrites the template's app/build.gradle. Exported for the test. */
+// What the first version of this plugin wrote for the release build type: a silent fallback to the debug key.
+const OLD_RELEASE_SIGNING = /signingConfig\(findProperty\('OBD_UPLOAD_STORE_FILE'\) \? signingConfigs\.release : \{[\s\S]*?\}\(\)\)/;
+
+/** Rewrites the template's app/build.gradle, or upgrades one the first version of this plugin wrote. Exported for the test. */
 function applyReleaseSigning(gradle) {
-  if (gradle.includes("OBD_UPLOAD_STORE_FILE")) return gradle;
+  if (gradle.includes("OBD_ALLOW_DEBUG_SIGNING")) return gradle;
+  if (gradle.includes("OBD_UPLOAD_STORE_FILE")) {
+    return gradle.replace(OLD_RELEASE_SIGNING, RELEASE_SIGNING) + GUARD;
+  }
   const configs = gradle.replace(/signingConfigs \{/, (m) => m + RELEASE_CONFIG);
   // The template's release build type points at the debug key, right after its "Caution!" comment.
   const signed = configs.replace(
