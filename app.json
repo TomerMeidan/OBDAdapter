@@ -44,12 +44,7 @@
           "bluetoothAlwaysPermission": "Used to read mileage from your car's OBD adapter"
         }
       ],
-      [
-        "expo-secure-store",
-        {
-          "configureAndroidBackup": true
-        }
-      ],
+      "expo-secure-store",
       "./plugins/withForegroundService",
       "./plugins/withReleaseSigning"
     ]

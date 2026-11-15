@@ -9,6 +9,8 @@ import { manager, waitForPoweredOn } from "./manager";
 
 const POLL_MS = 5 * 60_000; // while driving, so the value kept for the upload is close to the trip's end
 const RETRY_MS = 30_000; // adapter awake but ECU silent (ignition off)
+/** Failed reads in a row that end a drive: one NO DATA or garbled answer mid-drive must not split it. */
+const FAILURES_TO_END_DRIVE = 3;
 
 export const pairedDevice = item<string>("pairedDeviceId");
 
@@ -54,14 +56,18 @@ async function run(deviceId: string, isActive: () => boolean) {
       // A drive cut short (app stopped, phone restarted) and anything still queued go up first.
       await endDrive().catch(() => undefined);
       await retryUploads().catch(() => undefined);
+      let failures = 0;
       while (isActive() && !disconnected) {
         let delay = POLL_MS;
         try {
           await saveReading(await elm.readPid31());
+          failures = 0;
         } catch {
-          // The engine stopped answering: the drive is over, even if the adapter stays powered and connected.
+          // The engine stopped answering: after a few tries in a row the drive is over, even if the adapter stays
+          // powered and connected. A disconnect ends it at once (below).
           delay = RETRY_MS;
-          await endDrive().catch(() => undefined);
+          failures += 1;
+          if (failures === FAILURES_TO_END_DRIVE) await endDrive().catch(() => undefined);
         }
         if (isActive() && !disconnected) await sleep(delay);
       }

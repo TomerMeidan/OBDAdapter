@@ -20,12 +20,18 @@ test("readings the server will never accept are dropped", () => {
   assert.equal(classify(400, "odometer.tooMany"), "drop");
   assert.equal(classify(400, "odometer.futureDate"), "drop");
   assert.equal(classify(404, "http.404"), "drop");
+  assert.equal(classify(404, "vehicle.notFound"), "drop");
+  assert.equal(classify(400, "odometer.deviceImplausible"), "drop");
+  assert.equal(classify(429, "odometer.deviceTooMany"), "retry");
   assert.equal(classify(413), "drop");
 });
 
 test("every drop has a message", () => {
   assert.match(dropMessage("odometer.higherThanNext"), /skipped/);
   assert.match(dropMessage("odometer.tooMany"), /limit/);
+  // The code OnlyCars sends for a deleted or archived car (NotFoundException).
+  assert.match(dropMessage("vehicle.notFound"), /Pair the adapter again/);
+  assert.match(dropMessage("odometer.deviceImplausible"), /far above/);
   assert.match(dropMessage("something.else"), /something\.else/);
   assert.match(dropMessage(null), /refused/);
 });

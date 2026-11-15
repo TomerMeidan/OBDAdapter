@@ -62,7 +62,8 @@ repository:
 
 3. Run `npx expo prebuild --platform android`, then `npx expo run:android --variant release`.
 
-Without these properties the release build uses the debug key and prints a line saying so. Changing
+Without these properties a release build stops with an error (set `OBD_ALLOW_DEBUG_SIGNING=true`
+to build with the shared debug key anyway, for a quick test only). Debug builds never need the key. Changing
 the key means uninstalling the app first (Android refuses an update signed with another key), which
 clears its token and baseline. Losing the key has the same cost, so keep the copy.
 
@@ -99,7 +100,7 @@ npm run typecheck
 | `src/ble/manager.ts` | `BleManager` singleton with iOS state restoration |
 | `src/mileage/calc.ts` | Baseline maths and reset detection |
 | `src/mileage/sync.ts` | One reading per drive, offline upload queue, baseline |
-| `src/mileage/outcome.ts` | What to do with a reading OnlyCars refused |
+| `src/mileage/outcome.ts` | Upload queue pass and what to do with a reading OnlyCars refused |
 | `src/api/onlycars.ts` | OnlyCars device API client and the stored token |
 | `src/screens/` | Token entry, pairing/car/baseline, home |
 | `plugins/withForegroundService.js` | Marks the Android service as `connectedDevice` |

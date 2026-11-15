@@ -1,9 +1,14 @@
 import * as SecureStore from "expo-secure-store";
+import { ApiError } from "./errors";
 import { localDate } from "../mileage/outcome";
 import { item } from "../storage";
 import type { Reading, RemoteVehicle } from "../types";
 
 const BASE = (process.env.EXPO_PUBLIC_ONLYCARS_URL || "https://onlycars-ev28.onrender.com").replace(/\/+$/, "");
+/** The token never goes over plain http: only a development build may use a local http server. */
+const INSECURE = !BASE.startsWith("https://") && !__DEV__;
+
+export { ApiError };
 
 /**
  * The device token made in OnlyCars (Settings, Connected devices). It can only list cars and add odometer
@@ -45,19 +50,9 @@ export function onTokenChange(listener: (token: string | null) => void) {
   return () => void listeners.delete(listener);
 }
 
-/** A response from OnlyCars that isn't a success. `status` is null when there was no response at all. */
-export class ApiError extends Error {
-  readonly status: number | null;
-  readonly code: string | null;
-  constructor(status: number | null, code: string | null, message: string) {
-    super(message);
-    this.status = status;
-    this.code = code;
-  }
-}
-
 async function call<T>(path: string, token: string | null, method = "GET", body?: unknown): Promise<T> {
   if (!token) throw new ApiError(401, null, "No device token saved.");
+  if (INSECURE) throw new ApiError(null, "config.insecureUrl", "The OnlyCars address must start with https://");
   let res: Response;
   try {
     res = await fetch(`${BASE}/api/device${path}`, {

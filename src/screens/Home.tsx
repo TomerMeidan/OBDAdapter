@@ -114,6 +114,10 @@ export default function Home({ onUnpaired }: { onUnpaired: () => void }) {
       )}
       <Button quiet title="Pair a different adapter" onPress={unpair} />
       <Button quiet title="Disconnect from OnlyCars" onPress={signOut} />
+      <Note>
+        Disconnecting removes the token from this phone only. To stop it working, also remove this device in OnlyCars
+        (Settings, Connected devices).
+      </Note>
     </ScrollView>
   );
 }

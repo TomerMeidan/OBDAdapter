@@ -1,9 +1,9 @@
-import { ApiError, postReading } from "../api/onlycars";
+import { postReading } from "../api/onlycars";
 import { setStatus } from "../status";
 import { item } from "../storage";
 import type { Reading, Vehicle } from "../types";
 import { decide } from "./calc";
-import { classify, dropMessage, uuid } from "./outcome";
+import { drain, driveReading, uuid } from "./outcome";
 
 // Uploads wait here while the phone is offline (e.g. underground parking).
 const queueStore = item<Reading[]>("uploadQueue");
@@ -25,38 +25,13 @@ function exclusive<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 async function flush(): Promise<void> {
-  const queue = (await queueStore.get()) ?? [];
-  let message: string | null = null;
-  let tokenRejected = false;
-  while (queue.length) {
-    try {
-      await postReading(queue[0]);
-    } catch (e) {
-      const error = e instanceof ApiError ? e : new ApiError(null, null, String(e));
-      const outcome = classify(error.status, error.code);
-      if (outcome === "retry") {
-        message = `Upload waiting: ${error.message}`;
-        break;
-      }
-      if (outcome === "auth") {
-        tokenRejected = true;
-        message = "OnlyCars refused the device token. Enter a new one.";
-        break;
-      }
-      if (outcome === "rebaseline") {
-        const vehicle = await vehicleStore.get();
-        if (vehicle) await vehicleStore.set({ ...vehicle, needs_rebaseline: true });
-        setStatus({ needsRebaseline: true });
-        message = "OnlyCars already has a higher reading for this car. Enter the dashboard km again.";
-      } else {
-        message = dropMessage(error.code);
-      }
-      // Anything below is a reading the server will never take: drop it so it can't block the rest.
-    }
-    queue.shift();
-    await queueStore.set(queue);
+  const result = await drain((await queueStore.get()) ?? [], postReading, (remaining) => queueStore.set(remaining));
+  if (result.rebaseline) {
+    const vehicle = await vehicleStore.get();
+    if (vehicle) await vehicleStore.set({ ...vehicle, needs_rebaseline: true });
+    setStatus({ needsRebaseline: true });
   }
-  setStatus({ pendingUploads: queue.length, message, tokenRejected });
+  setStatus({ pendingUploads: result.remaining.length, message: result.message, tokenRejected: result.tokenRejected });
 }
 
 /** Turns a PID 31 value into the drive's current odometer value (or a re-baseline request). Nothing is uploaded yet. */
@@ -103,12 +78,12 @@ export function endDrive(): Promise<void> {
   return exclusive(async () => {
     const drive = await driveStore.get();
     if (!drive) return;
-    const vehicle = await vehicleStore.get();
-    if (vehicle && !vehicle.needs_rebaseline && drive.odometer_km !== (await lastQueuedStore.get())) {
+    const reading = driveReading(drive, await vehicleStore.get(), await lastQueuedStore.get(), uuid());
+    if (reading) {
       const queue = (await queueStore.get()) ?? [];
-      queue.push({ id: uuid(), vehicle_id: vehicle.id, read_at: drive.read_at, odometer_km: drive.odometer_km });
+      queue.push(reading);
       await queueStore.set(queue);
-      await lastQueuedStore.set(drive.odometer_km);
+      await lastQueuedStore.set(reading.odometer_km);
     }
     await driveStore.clear();
     await flush();

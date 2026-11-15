@@ -38,6 +38,11 @@ export default function SignIn() {
         placeholder="Device token (ocd_…)"
         autoCapitalize="none"
         autoCorrect={false}
+        // A keyboard app must not learn the token: no suggestions, no autofill, no spell check.
+        autoComplete="off"
+        importantForAutofill="no"
+        spellCheck={false}
+        keyboardType="visible-password"
         value={value}
         onChangeText={setValue}
       />
