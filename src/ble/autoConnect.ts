@@ -85,8 +85,21 @@ async function run(deviceId: string, isActive: () => boolean) {
   }
 }
 
-/** Starts the background loop for the paired adapter (no-op if already running). */
-export async function startAutoConnect() {
+let starting: Promise<void> | undefined;
+
+/**
+ * Starts the background loop for the paired adapter (no-op if already running). Calls that overlap share one start:
+ * the entry file and the app both call this on launch, and without this both passed the "already running" check
+ * while reading the paired adapter, which started two loops on the same adapter.
+ */
+export function startAutoConnect(): Promise<void> {
+  starting ??= start().finally(() => {
+    starting = undefined;
+  });
+  return starting;
+}
+
+async function start() {
   const deviceId = await pairedDevice.get();
   if (!deviceId || stopCurrent) return;
   let active = true;
